@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TelyClaw Growth Engine · Real-time Social Trend to Content Growth Engine</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">TC</div>
+      <div>
+        <h1>TelyClaw Growth Engine</h1>
+        <p>Real-time Social Trend → Content Growth Engine · Vibe Coding Challenge MVP</p>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <span class="badge" id="badge-source">数据源: —</span>
+      <span class="badge" id="badge-llm">生成: —</span>
+      <label class="win-picker">
+        时间窗口
+        <select id="window-select">
+          <option value="1H">Last 1H</option>
+          <option value="4H">Last 4H</option>
+          <option value="24H" selected>Last 24H</option>
+          <option value="7D">Last 7D</option>
+        </select>
+      </label>
+      <button class="btn ghost" id="btn-tour">演示模式</button>
+      <button class="btn ghost" id="btn-reset">重置数据</button>
+    </div>
+  </header>
+
+  <nav class="tabs" id="tabs">
+    <button data-tab="overview" class="active">概览</button>
+    <button data-tab="accounts">账号监控</button>
+    <button data-tab="trends">热点分析</button>
+    <button data-tab="ranking">机会排序</button>
+    <button data-tab="studio">内容工厂</button>
+    <button data-tab="published">发布记录</button>
+    <button data-tab="metrics">数据看板</button>
+    <button data-tab="settings">设置</button>
+  </nav>
+
+  <main>
+    <div class="notice" id="notice" hidden></div>
+
+    <!-- ============ 概览 ============ -->
+    <section class="view active" id="view-overview">
+      <div class="flow" id="flow-steps">
+        <div class="flow-step" data-step="Monitor">Monitor<small>监控 X 账号</small></div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step" data-step="Detect">Detect<small>热点识别</small></div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step" data-step="Rank">Rank<small>机会打分</small></div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step" data-step="Ideate">Ideate<small>多角度选题</small></div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step" data-step="Craft">Craft<small>生成推文</small></div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step" data-step="Review">Review<small>人工审核</small></div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step" data-step="Publish">Publish<small>发布</small></div>
+      </div>
+
+      <div class="grid-4" id="overview-stats"></div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>一键跑通闭环</h2>
+          <span class="hint">抓取 → 热点识别 → 机会排序 → 为 Top1 热点生成内容草稿</span>
+        </div>
+        <div class="row">
+          <button class="btn primary" id="btn-run-all">▶ 运行完整流水线</button>
+          <button class="btn" id="btn-only-ingest">仅抓取帖子</button>
+          <button class="btn" id="btn-only-analyze">仅做热点识别 + 排序</button>
+        </div>
+        <div class="log" id="run-log"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>当前最值得跟进的热点</h2><span class="hint">按 Opportunity Score 排序</span></div>
+        <div id="overview-top"></div>
+      </div>
+    </section>
+
+    <!-- ============ 账号监控 ============ -->
+    <section class="view" id="view-accounts">
+      <div class="card">
+        <div class="card-head">
+          <h2>监控账号（A. Account Monitoring）</h2>
+          <span class="hint" id="accounts-hint"></span>
+        </div>
+        <div class="row">
+          <button class="btn primary" id="btn-ingest">抓取当前窗口帖子</button>
+          <span class="hint" id="ingest-result"></span>
+        </div>
+        <table class="table" id="accounts-table">
+          <thead>
+            <tr><th>账号</th><th>名称</th><th>类别</th><th>状态</th><th>操作</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <div class="row add-row">
+          <input id="acc-handle" placeholder="@handle" />
+          <input id="acc-name" placeholder="名称（可选）" />
+          <input id="acc-category" placeholder="类别（可选）" />
+          <button class="btn" id="btn-add-acc">添加账号</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>抓取到的帖子（依据证据）</h2><span class="hint">按互动量排序，最多显示 40 条</span></div>
+        <div id="posts-list" class="posts"></div>
+      </div>
+    </section>
+
+    <!-- ============ 热点分析 ============ -->
+    <section class="view" id="view-trends">
+      <div class="card">
+        <div class="card-head">
+          <h2>AI Trend Detection（B. 热点识别）</h2>
+          <span class="hint">相同话题的帖子会被聚合成 Topic 并自动命名，同时判断"是否正在加速"</span>
+        </div>
+        <div class="row">
+          <button class="btn primary" id="btn-analyze">运行热点识别</button>
+          <span class="hint" id="analyze-result"></span>
+        </div>
+      </div>
+      <div id="topics-list"></div>
+    </section>
+
+    <!-- ============ 机会排序 ============ -->
+    <section class="view" id="view-ranking">
+      <div class="card">
+        <div class="card-head">
+          <h2>Trend Opportunity Ranking（C. 机会打分）</h2>
+          <span class="hint">讨论多 ≠ 值得跟进；这里给出可解释的分数拆解与理由</span>
+        </div>
+        <div class="weights-inline" id="weights-inline"></div>
+      </div>
+      <div id="ranking-list"></div>
+    </section>
+
+    <!-- ============ 内容工厂 ============ -->
+    <section class="view" id="view-studio">
+      <div class="card">
+        <div class="card-head">
+          <h2>Content Studio（D. 内容生成 + 人工审核）</h2>
+          <span class="hint">每个热点至少 3 个角度 + 至少 1 条可直接发布；所有草稿强制原创度校验</span>
+        </div>
+        <div class="row">
+          <select id="studio-topic"></select>
+          <button class="btn primary" id="btn-generate">为选中热点生成内容</button>
+          <label class="check"><input type="checkbox" id="show-all-drafts" /> 显示全部草稿</label>
+        </div>
+        <div class="review-flow">
+          <span>Trend</span>→<span>AI Draft</span>→<span>Human Edit</span>→<span>Approve</span>→<span>Publish</span>
+        </div>
+      </div>
+      <div id="drafts-list"></div>
+    </section>
+
+    <!-- ============ 发布记录 ============ -->
+    <section class="view" id="view-published">
+      <div class="card">
+        <div class="card-head"><h2>已发布内容</h2><span class="hint">MVP 为模拟发布（真实 X API 写入属 Bonus 项）</span></div>
+        <div id="published-list"></div>
+      </div>
+    </section>
+
+    <!-- ============ 数据看板 ============ -->
+    <section class="view" id="view-metrics">
+      <div id="metrics-body"></div>
+    </section>
+
+    <!-- ============ 设置 ============ -->
+    <section class="view" id="view-settings">
+      <div class="card">
+        <div class="card-head"><h2>运行模式</h2><span class="hint">改动即时生效（也可在 .env 中配置）</span></div>
+        <div class="row">
+          <label>数据源
+            <select id="set-source">
+              <option value="simulated">simulated（内置仿真数据，默认）</option>
+              <option value="x_api">x_api（真实 X API v2，需 Bearer Token）</option>
+            </select>
+          </label>
+          <label>内容生成
+            <select id="set-llm">
+              <option value="mock">mock（内置生成器，无需 key）</option>
+              <option value="openai">openai（OpenAI 兼容接口）</option>
+            </select>
+          </label>
+          <span class="hint" id="settings-status"></span>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Opportunity Score 权重</h2><span class="hint">自己定义"什么才叫值得跟进"——改完立刻重算</span></div>
+        <div id="weights-editor" class="weights-editor"></div>
+        <div class="row"><button class="btn primary" id="btn-save-weights">保存权重并重算排序</button></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>生产化说明</h2></div>
+        <ul class="plain">
+          <li>X API 需要付费档位 + Rate Limit 约束，MVP 用仿真数据跑通链路，<code>src/ingest.js</code> 已实现真实 API 适配层，填 token 即可切换。</li>
+          <li>LLM 同理：<code>LLM_MODE=openai</code> 后调用真实模型，Prompt 与校验逻辑不变，失败会自动回退到内置生成器。</li>
+          <li>持久化目前是 <code>data/state.json</code>（便于面试演示复现）；生产环境替换为 Postgres/Supabase，业务模块无需改动。</li>
+        </ul>
+      </div>
+    </section>
+  </main>
+
+  <!-- 演示引导 -->
+  <aside class="tour" id="tour" hidden>
+    <div class="tour-head">
+      <strong>演示模式 <span id="tour-step-no"></span></strong>
+      <button class="btn tiny ghost" id="tour-close">退出</button>
+    </div>
+    <h3 id="tour-title"></h3>
+    <p id="tour-tip"></p>
+    <div class="row">
+      <button class="btn tiny" id="tour-prev">上一步</button>
+      <button class="btn tiny primary" id="tour-next">下一步</button>
+    </div>
+  </aside>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
