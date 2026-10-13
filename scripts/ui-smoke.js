@@ -66,11 +66,58 @@ await sleep(1200);
 assert(text('#metrics-body').includes('North Star'), '数据看板渲染出 North Star 指标');
 assert(document.querySelectorAll('#weights-editor input[type=range]').length === 7, '设置页有 7 个权重滑杆（含爆发动能）');
 
+/* ---- 新增：视觉系统与易用性 ---- */
+assert(has('.appbar'), '存在粘性导航容器（顶栏 + 页签）');
+assert(document.querySelectorAll('#tabs button svg').length === 8, '8 个页签都带图标');
+assert(document.querySelectorAll('#flow-steps .flow-idx').length === 7, '流程条有 7 个步骤序号');
+assert(has('#next-step #btn-next-step'), '概览页渲染出「下一步建议」及行动按钮');
+assert(text('#next-step').includes('下一步建议'), '建议条展示了引导文案');
+
+// 页签徽标：账号数应已知且为正
+const badgeAccounts = document.querySelector('#tab-badge-accounts');
+assert(badgeAccounts && !badgeAccounts.hidden && Number(badgeAccounts.textContent) > 0, '账号页签徽标展示了账号数量');
+
+// 键盘快捷键：数字键切换页签
+document.dispatchEvent(new window.KeyboardEvent('keydown', { key: '2', bubbles: true }));
+await sleep(300);
+assert(document.querySelector('#view-accounts').classList.contains('active'), '快捷键 2 切换到账号监控');
+document.dispatchEvent(new window.KeyboardEvent('keydown', { key: '1', bubbles: true }));
+await sleep(200);
+assert(document.querySelector('#view-overview').classList.contains('active'), '快捷键 1 切回概览');
+
+// 键盘快捷键：? 弹出帮助
+document.dispatchEvent(new window.KeyboardEvent('keydown', { key: '?', bubbles: true }));
+await sleep(200);
+assert(!document.querySelector('#toast').hidden && text('#toast').includes('快捷键'), '快捷键 ? 弹出帮助提示');
+
+// 热点 / 排序页的视觉组件
+document.querySelector('#tabs button[data-tab="trends"]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+await sleep(250);
+if (document.querySelectorAll('#topics-list .topic').length) {
+  assert(has('#topics-list .topic-stats b'), '热点卡渲染出指标胶囊');
+  assert(has('#topics-list .spark-bar'), '热点卡渲染出走势迷你图');
+  assert(has('#topics-list .chips span'), '热点卡渲染出关键词徽标');
+}
+document.querySelector('#tabs button[data-tab="ranking"]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+await sleep(250);
+if (document.querySelectorAll('#ranking-list .opp').length) {
+  assert(has('#ranking-list .rank-badge'), '排序卡渲染出名次徽标');
+  assert(has('#ranking-list .factor-bar i'), '因子渲染出进度条');
+}
+document.querySelector('#tabs button[data-tab="accounts"]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+await sleep(500);
+if (document.querySelectorAll('#posts-list .post').length) {
+  assert(has('#posts-list .post .avatar'), '帖子渲染出账号头像气泡');
+}
+
 // 演示模式
 document.querySelector('#btn-tour').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
 await sleep(400);
 assert(!document.querySelector('#tour').hidden, '演示模式面板已打开');
 const tourTotal = Number((text('#tour-step-no').split('/')[1] || '0').trim()) || 9;
+assert(document.querySelectorAll('#tour-dots i').length === tourTotal, '演示面板渲染出进度圆点');
+const w0 = parseFloat(document.querySelector('#tour-progress-i').style.width);
+assert(w0 > 0 && w0 <= 100, `演示进度条宽度有效（${w0}%）`);
 for (let i = 0; i < tourTotal; i++) {
   document.querySelector('#tour-next').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
   await sleep(250);

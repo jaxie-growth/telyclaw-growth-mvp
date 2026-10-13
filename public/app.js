@@ -14,6 +14,22 @@ const state = {
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
+/* 图标（内联 SVG，避免额外请求；统一加 .ic 兜底尺寸，防止没有上下文尺寸时被撑满容器） */
+const ICONS = {
+  play: '<path d="M7 4.5v15l12-7.5-12-7.5Z"/>',
+  spark: '<path d="M12 3l1.9 4.9L18.8 9.8l-4.9 1.9L12 16.6l-1.9-4.9L5.2 9.8l4.9-1.9L12 3Z"/>',
+  clock: '<circle cx="12" cy="12" r="8.6"/><path d="M12 7.4V12l3.1 2"/>',
+  warn: '<path d="M10.3 4 2.2 17.8A2 2 0 0 0 3.9 20.8h16.2a2 2 0 0 0 1.7-3L13.7 4a2 2 0 0 0-3.4 0Z"/><path d="M12 9.2v4"/><path d="M12 16.6h.01"/>',
+  info: '<circle cx="12" cy="12" r="8.6"/><path d="M12 16.4v-4.6"/><path d="M12 7.8h.01"/>',
+  target: '<circle cx="12" cy="12" r="8.6"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r=".6"/>',
+  inbox: '<path d="M3.5 12.5 6 5.5h12l2.5 7v5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2v-5Z"/><path d="M3.5 12.5h4l1 2.5h7l1-2.5h4"/>',
+};
+const icon = (name, cls = '') =>
+  `<svg class="ic ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
+const iconFill = (name, cls = '') =>
+  `<svg class="ic ${cls}" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true">${ICONS[name]}</svg>`;
+
+
 const esc = (s = '') =>
   String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -89,6 +105,7 @@ function render() {
   $('#window-select').value = d.lastWindow || '24H';
 
   renderActor(d);
+  renderNextStep(d);
   renderOverview(d);
   renderAlerts(d);
   renderAccounts(d);
@@ -97,9 +114,72 @@ function render() {
   renderRanking(d);
   renderStudio(d);
   renderPublished(d);
+  renderTabBadges(d);
   renderSettings(d);
   syncTourUI();
 }
+
+/* ---------------- 下一步该做什么（按状态给出唯一建议） ---------------- */
+function renderNextStep(d) {
+  const box = $('#next-step');
+  if (!box) return;
+  const m = metricsOf(d.analysis);
+  const drafts = d.drafts || [];
+  const pending = drafts.filter((x) => ['draft', 'needs_revision'].includes(x.status));
+  const approved = drafts.filter((x) => x.status === 'approved');
+  const published = d.published || [];
+
+  let step;
+  if (!(d.accounts || []).length) {
+    step = { text: '还没有监控账号。去「账号监控」添加要盯的 X 账号。', label: '去添加账号', action: () => switchTab('accounts') };
+  } else if (!d.postCount) {
+    step = { text: '数据源已就绪，但还没有抓取到帖子。先跑一次抓取建立基线。', label: '抓取帖子', action: () => doIngest() };
+  } else if (!m.topicCount) {
+    step = { text: `已抓取 ${fmt(d.postCount)} 条帖子，但还没做热点识别。运行识别才能得到机会排序。`, label: '运行热点识别', action: () => doAnalyze() };
+  } else if (!drafts.length) {
+    step = { text: `识别出 ${m.topicCount} 个热点（${m.rising} 个在加速）。现在为 Top1 生成多角度草稿。`, label: '生成内容', action: () => doGenerate(d.analysis.topics[0]?.key) };
+  } else if (pending.length) {
+    step = { text: `有 ${pending.length} 条草稿待审核。审核通过后发布人才发得出去。`, label: '去审核草稿', action: () => switchTab('studio') };
+  } else if (approved.length) {
+    step = { text: `有 ${approved.length} 条已批准待发布。切换为发布人身份即可发出。`, label: '去发布', action: () => switchTab('studio') };
+  } else if (published.length) {
+    step = { text: `闭环已跑通，共发布 ${published.length} 条。去数据看板复盘命中率与北星指标。`, label: '看数据看板', action: () => switchTab('metrics') };
+  } else {
+    step = { text: '运行完整流水线，一次走完 监控 → 识别 → 排序 → 生成。', label: '运行流水线', action: () => runAll() };
+  }
+
+  box.innerHTML = `<span class="icon">${iconFill('spark')}</span>
+    <div class="grow"><div class="label">下一步建议</div><div class="text">${esc(step.text)}</div></div>
+    <button class="btn primary" id="btn-next-step">${esc(step.label)}</button>`;
+  $('#btn-next-step').onclick = step.action;
+}
+
+/* ---------------- 页签徽标 ---------------- */
+function renderTabBadges(d) {
+  const set = (tab, value) => {
+    const el = $(`#tab-badge-${tab}`);
+    if (!el) return;
+    el.textContent = value;
+    el.hidden = !value;
+  };
+  set('accounts', (d.accounts || []).length);
+  set('trends', (d.analysis?.topics || []).length);
+  set('studio', (d.drafts || []).length);
+  set('published', (d.published || []).length);
+
+  // 内容工厂的流程条：点亮已经走到的环节
+  const drafts = d.drafts || [];
+  const reached = {
+    Trend: Boolean(d.analysis?.topics?.length),
+    'AI Draft': drafts.length > 0,
+    'Editor Agent 自评': drafts.some((x) => x.review),
+    'Human Edit': drafts.some((x) => x.editedCount > 0),
+    'Reviewer 批准': drafts.some((x) => ['approved', 'published'].includes(x.status)),
+    'Publisher 发布': (d.published || []).length > 0,
+  };
+  $$('#review-flow span').forEach((el) => el.classList.toggle('on', Boolean(reached[el.textContent.trim()])));
+}
+
 
 /** 当前身份（决定能点哪些按钮） */
 function renderActor(d) {
@@ -137,6 +217,7 @@ function renderAlerts(d) {
   const badge = $('#alert-badge');
   badge.hidden = unread === 0;
   badge.textContent = unread;
+  $('#btn-alerts').classList.toggle('has-unread', unread > 0);
 
   $('#sched-enabled').checked = Boolean(sch.enabled);
   $('#scheduler-hint').textContent = sch.enabled
@@ -148,15 +229,15 @@ function renderAlerts(d) {
         .map(
           (a) => `<div class="alert ${a.read ? 'read' : ''} ${a.surging ? 'surging' : ''}">
         <div class="alert-head">
-          <div>
+          <div class="who">
             <b>${esc(a.topicName)}</b>
             ${a.surging ? '<span class="tag ok">正在起爆</span>' : ''}
-            <span class="score-pill">${a.score} 分</span>
+            <span class="score-pill"><b>${a.score}</b>分</span>
           </div>
           <div class="hint">${relTime(a.at)}${a.read ? ' · 已读' : ''}</div>
         </div>
         <div class="hint">${esc(a.reason || '')}</div>
-        ${a.timingAdvice ? `<div class="hint">行动建议：${esc(a.timingAdvice)}</div>` : ''}
+        ${a.timingAdvice ? `<div class="callout">${icon('clock')}<span><b>行动建议</b>：${esc(a.timingAdvice)}</span></div>` : ''}
         <div class="row">
           <button class="btn tiny primary" data-gen="${esc(a.topicKey)}">为该热点生成内容</button>
           ${a.read ? '' : `<button class="btn tiny" data-alert-read="${esc(a.id)}">标记已读</button>`}
@@ -164,7 +245,8 @@ function renderAlerts(d) {
       </div>`
         )
         .join('')
-    : '<p class="hint">还没有提醒。打开上面的"启用定时轮询"后点"立即执行一轮"，或等待下一次自动轮询——只有分数达到阈值的**新**机会才会出现在这里。</p>';
+    : `<div class="empty">${icon('inbox')}<div>还没有提醒</div>
+       <div class="hint">打开上面的「启用定时轮询」后点「立即执行一轮」，或等待下一次自动轮询——只有分数达到阈值的<strong>新</strong>机会才会出现在这里。</div></div>`;
 }
 
 function metricsOf(analysis) {
@@ -221,10 +303,10 @@ function renderOverview(d) {
            <button class="btn primary" data-gen="${esc(top.key)}">为它生成内容</button>
          </div>
          <div class="topic-summary">${esc(top.summary)}</div>
-         ${top.verdict ? `<div class="verdict">${esc(top.verdict)}</div>` : ''}
-         ${top.timingAdvice ? `<div class="hint">⏱ ${esc(top.timingAdvice)}</div>` : ''}
+         ${top.verdict ? `<div class="verdict">${icon('target')}<span>${esc(top.verdict)}</span></div>` : ''}
+         ${top.timingAdvice ? `<div class="callout">${icon('clock')}<span><b>时效建议</b>：${esc(top.timingAdvice)}</span></div>` : ''}
        </div>`
-    : '<p class="hint">还没有分析结果，先在上方运行"完整流水线"。</p>';
+    : `<div class="empty">${icon('inbox')}<div>还没有分析结果</div><div class="hint">先在上方点「运行完整流水线」。</div></div>`;
 }
 
 function renderAccounts(d) {
@@ -246,47 +328,53 @@ function renderAccounts(d) {
   $('#accounts-hint').textContent = `${(d.accounts || []).length} 个账号 · 最少 5 个（验收标准）· 当前窗口 ${d.lastWindow || '24H'}`;
 }
 
+const avatar = (handle = '') => esc(String(handle).replace(/^@/, '').slice(0, 2) || '?');
+
 function renderPosts(d) {
   const posts = (state.posts || []).slice(0, 40);
   $('#posts-list').innerHTML = posts.length
     ? posts
         .map(
           (p) => `<div class="post">
-        <div class="meta">${esc(p.account)} · ${esc(p.category || '')} · ${new Date(p.createdAt).toLocaleString('zh-CN')} · 互动 ${fmt(p.engagement)}</div>
-        <div class="text">${esc(p.text)}</div>
+        <div class="avatar" aria-hidden="true">${avatar(p.account)}</div>
+        <div class="body">
+          <div class="meta"><b>${esc(p.account)}</b>${p.category ? ' · ' + esc(p.category) : ''} · ${new Date(p.createdAt).toLocaleString('zh-CN')} · 互动 ${fmt(p.engagement)}</div>
+          <div class="text">${esc(p.text)}</div>
+        </div>
       </div>`
         )
         .join('')
-    : '<p class="hint">点击上方"抓取当前窗口帖子"后，这里会显示原始证据（帖子流）。</p>';
+    : `<div class="empty">${icon('inbox')}<div>还没有抓取到帖子</div><div class="hint">点击上方「抓取当前窗口帖子」后，这里会显示原始证据（帖子流）。</div></div>`;
 }
 
 function sparkline(hist = []) {
   if (!hist.length) return '';
   const max = Math.max(...hist, 1);
   const w = 150;
-  const h = 34;
+  const h = 36;
+  const cut = hist.length * 0.75;
   const bars = hist
     .map((v, i) => {
-      const bh = Math.max(1, (v / max) * h);
-      return `<rect x="${(i * w) / hist.length}" y="${h - bh}" width="${w / hist.length - 1.2}" height="${bh}" rx="1.4" fill="${i >= hist.length * 0.75 ? '#0f7f8c' : '#cfe6e9'}" />`;
+      const bh = Math.max(1.5, (v / max) * (h - 4));
+      return `<rect class="spark-bar${i >= cut ? ' hot' : ''}" x="${(i * w) / hist.length}" y="${h - bh}" width="${Math.max(1, w / hist.length - 1.4)}" height="${bh}" rx="1.6" />`;
     })
     .join('');
-  return `<svg class="spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${bars}</svg>`;
+  return `<svg class="spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-label="发帖量走势">${bars}</svg>`;
 }
 
 function renderTopics(d) {
   const topics = d.analysis?.topics || [];
   const box = $('#topics-list');
   if (!topics.length) {
-    box.innerHTML = '<div class="card"><p class="hint">还没有热点结果。先抓取帖子，再点"运行热点识别"。</p></div>';
+    box.innerHTML = `<div class="card"><div class="empty">${icon('inbox')}<div>还没有热点结果</div><div class="hint">先到「账号监控」抓取帖子，再回到这里点「运行热点识别」。</div></div></div>`;
     return;
   }
   box.innerHTML = topics
     .map(
       (t) => `<div class="card topic ${t.rising ? 'rising' : ''}" id="topic-${esc(t.key)}">
       <div class="topic-head">
-        <div>
-          <div class="topic-title">${esc(t.name)} ${
+        <div style="min-width:0">
+          <div class="topic-title">#${t.rank} ${esc(t.name)} ${
             t.surging
               ? '<span class="tag ok">正在起爆</span>'
               : t.rising
@@ -296,6 +384,7 @@ function renderTopics(d) {
                   : ''
           }</div>
           <div class="topic-stats">
+            <span>机会分数 <b>${t.score}</b></span>
             <span>帖子 <b>${t.postCount}</b></span>
             <span>独立账号 <b>${t.accountCount}</b></span>
             <span>总互动 <b>${fmt(t.engagement)}</b></span>
@@ -305,19 +394,29 @@ function renderTopics(d) {
             <span>TelyClaw 相关性 <b>${pct(t.relevance)}</b></span>
           </div>
         </div>
-        <div style="text-align:right">
+        <div class="spark-box">
           ${sparkline(t.hist)}
-          <div class="hint">窗外：发帖量走勢（深色=最近 25%）</div>
-          <button class="btn tiny primary" style="margin-top:6px" data-gen="${esc(t.key)}">生成内容</button>
+          <div class="hint">窗口内发帖量走势（深色 = 最近 25%）</div>
+          <button class="btn tiny primary" data-gen="${esc(t.key)}">生成内容</button>
         </div>
       </div>
       <div class="topic-summary"><b>AI 摘要：</b>${esc(t.summary)}</div>
-      <div class="hint" style="margin-top:8px">关键词：${(t.keywords || []).map(esc).join(' / ')} ${(t.cashtags || []).length ? '· 高频标的：' + t.cashtags.map(esc).join(' ') : ''}</div>
-      <div class="hint">参与账号：${(t.accounts || []).map(esc).join('、')}</div>
+      <div class="chips" style="margin-top:10px">
+        <span class="chips-label">关键词</span>
+        ${(t.keywords || []).map((k) => `<span>${esc(k)}</span>`).join('')}
+        ${(t.cashtags || []).length ? `<span class="chips-label" style="margin-left:6px">高频标的</span>${t.cashtags.map((c) => `<span class="cash">${esc(c)}</span>`).join('')}` : ''}
+      </div>
+      <div class="meta-line">参与账号：<b>${(t.accounts || []).map(esc).join('、')}</b></div>
       <div class="topic-posts">
         ${(t.samplePosts || [])
           .map(
-            (p) => `<div class="post"><div class="meta">${esc(p.account)} · 互动 ${fmt(p.engagement)} · ${new Date(p.createdAt).toLocaleTimeString('zh-CN')}</div><div class="text">${esc(p.text)}</div></div>`
+            (p) => `<div class="post">
+            <div class="avatar" aria-hidden="true">${avatar(p.account)}</div>
+            <div class="body">
+              <div class="meta"><b>${esc(p.account)}</b> · 互动 ${fmt(p.engagement)} · ${new Date(p.createdAt).toLocaleTimeString('zh-CN')}</div>
+              <div class="text">${esc(p.text)}</div>
+            </div>
+          </div>`
           )
           .join('')}
       </div>
@@ -326,16 +425,27 @@ function renderTopics(d) {
     .join('');
 }
 
+/* 权重因子的中文名（设置页与排序页共用，避免两处不一致） */
+const WEIGHT_LABELS = {
+  momentum: '爆发动能 momentum',
+  velocity: '热度增速 velocity',
+  engagement: '互动规模 engagement',
+  accounts: '参与账号数 accounts',
+  freshness: '时效性 freshness',
+  relevance: 'TelyClaw 相关性 relevance',
+  contentOpportunity: '内容可生产性 contentOpportunity',
+};
+
 function renderRanking(d) {
   const topics = d.analysis?.topics || [];
   const w = d.config.weights || {};
   $('#weights-inline').innerHTML = Object.entries(w)
-    .map(([k, v]) => `<span>${k}: ${v}</span>`)
+    .map(([k, v]) => `<span>${esc((WEIGHT_LABELS[k] || k).split(' ')[0])} <b>${v}</b></span>`)
     .join('');
 
   const box = $('#ranking-list');
   if (!topics.length) {
-    box.innerHTML = '<div class="card"><p class="hint">还没有排序结果，先在"热点分析"里运行一次识别。</p></div>';
+    box.innerHTML = `<div class="card"><div class="empty">${icon('inbox')}<div>还没有排序结果</div><div class="hint">先在「热点分析」里运行一次识别。</div></div></div>`;
     return;
   }
   box.innerHTML = topics
@@ -344,32 +454,33 @@ function renderRanking(d) {
         .map(([key, f]) => {
           // 不同量纲的原始值用不同格式，否则 0.78 会被四舍五入成 "1" 看不出差别
           const rawText =
-            key === 'momentum'
+            key === 'momentum' || key === 'relevance' || key === 'freshness' || key === 'contentOpportunity'
               ? `${(f.raw * 100).toFixed(0)}%`
-              : key === 'relevance' || key === 'freshness' || key === 'contentOpportunity'
-                ? `${(f.raw * 100).toFixed(0)}%`
-                : Number(f.raw).toLocaleString('en-US');
+              : Number(f.raw).toLocaleString('en-US');
           return `<div class="factor">
-            ${esc(f.label)}（权重 ${(f.weight * 100).toFixed(0)}%）
-            <div class="bar"><i style="width:${Math.max(2, f.normalized * 100)}%"></i></div>
-            <span>因子分 ${f.normalized.toFixed(2)} · 贡献 ${f.contribution} 分 · 原始值 ${rawText}</span>
+            <div class="factor-top"><span>${esc(f.label)}</span><b>${f.normalized.toFixed(2)}</b></div>
+            <div class="factor-bar"><i style="width:${Math.max(2, f.normalized * 100)}%"></i></div>
+            <div class="factor-meta">权重 ${(f.weight * 100).toFixed(0)}% · 贡献 ${f.contribution} 分 · 原始值 ${rawText}</div>
           </div>`;
         })
         .join('');
       return `<div class="opp ${t.rank === 1 ? 'top' : ''}">
-      <div class="opp-rank">#${t.rank}</div>
+      <div class="opp-rank">
+        <div class="rank-badge">#${t.rank}</div>
+        <div class="hint">${t.rank === 1 ? 'Top 机会' : '排名'}</div>
+      </div>
       <div>
-        <div class="row" style="justify-content:space-between">
-          <div class="topic-title">${esc(t.name)}</div>
-          <div class="row">
-            <span class="score-pill">Opportunity ${t.score}</span>
+        <div class="row" style="justify-content:space-between;align-items:flex-start">
+          <div class="opp-title">${esc(t.name)}</div>
+          <div class="row" style="gap:8px">
+            <span class="score-pill"><b>${t.score}</b>分</span>
             <button class="btn tiny primary" data-gen="${esc(t.key)}">生成内容</button>
           </div>
         </div>
-        ${t.rank === 1 && t.verdict ? `<div class="verdict">${esc(t.verdict)}</div>` : ''}
-        ${t.timingAdvice ? `<div class="hint">⏱ <b>时效建议</b>：${esc(t.timingAdvice)}</div>` : ''}
+        ${t.rank === 1 && t.verdict ? `<div class="verdict">${icon('target')}<span>${esc(t.verdict)}</span></div>` : ''}
+        ${t.timingAdvice ? `<div class="callout">${icon('clock')}<span><b>时效建议</b>：${esc(t.timingAdvice)}</span></div>` : ''}
         <div class="factors">${factors}</div>
-        <div class="hint">建议切入角度：${(t.suggestedAngles || []).map(esc).join('；')}</div>
+        <div class="hint" style="margin-top:13px">建议切入角度：${(t.suggestedAngles || []).map(esc).join('；')}</div>
         <ul class="reasons">${(t.reasons || []).map((r) => `<li>${esc(r)}</li>`).join('')}</ul>
       </div>
     </div>`;
@@ -395,7 +506,7 @@ function renderStudio(d) {
 
   $('#drafts-list').innerHTML = drafts.length
     ? drafts.map(draftCard).join('')
-    : '<div class="card"><p class="hint">还没有草稿。选中一个热点后点"为选中热点生成内容"。</p></div>';
+    : `<div class="card"><div class="empty">${icon('inbox')}<div>还没有草稿</div><div class="hint">在上方选中一个热点，点「为选中热点生成内容」。</div></div></div>`;
 
   const a = d.actor;
   const permLabels = { generate: '生成', edit: '编辑', approve: '批准', reject: '驳回', publish: '发布', assign: '分配' };
@@ -459,7 +570,7 @@ function draftCard(x) {
         : '<div class="hint">该草稿还没有编辑 Agent 评审，点下面的「编辑 Agent 复评」生成。</div>'
     }
 
-    <div class="pred">预估表现（模拟）：曝光 ${fmt(p.impressions)} · 互动 ${fmt(p.engagement)} · ICP 占比 ${pct(p.icpShare)} · 合格互动 ${fmt(p.qualifiedEngagement)}</div>
+    <div class="pred">预估表现（模拟）：曝光 <b>${fmt(p.impressions)}</b> · 互动 <b>${fmt(p.engagement)}</b> · ICP 占比 <b>${pct(p.icpShare)}</b> · 合格互动 <b>${fmt(p.qualifiedEngagement)}</b></div>
 
     <div class="assign-row">
       <span class="hint">审核人分配</span>
@@ -470,7 +581,7 @@ function draftCard(x) {
           .map((m) => `<option value="${esc(m.id)}" ${x.assignedTo === m.id ? 'selected' : ''}>${esc(m.name)}（${esc(m.roleLabel)}）</option>`)
           .join('')}
       </select>
-      <span class="hint">${assignee ? '已分配给 ' + esc(assignee.name) : '未指派'}${
+      <span class="hint">${assignee ? '已分配给 <b>' + esc(assignee.name) + '</b>' : '未指派'}${
         reviewer ? ' · 批准人 ' + esc(reviewer.name) : ''
       }${x.publishedBy ? ' · 发布人 ' + esc(members.find((m) => m.id === x.publishedBy)?.name || '—') : ''}</span>
     </div>
@@ -479,6 +590,7 @@ function draftCard(x) {
       <button class="btn tiny" data-save="${x.id}" ${guardAttr('edit')}>保存人工编辑</button>
       <button class="btn tiny" data-review="${x.id}">编辑 Agent 复评</button>
       <button class="btn tiny" data-regen="${x.id}" ${guardAttr('generate')}>重新生成</button>
+      <span class="spacer"></span>
       <button class="btn tiny" data-approve="${x.id}" ${guardAttr('approve')}>批准</button>
       <button class="btn tiny" data-reject="${x.id}" ${guardAttr('reject')}>驳回</button>
       <button class="btn tiny primary" data-publish="${x.id}" ${publishBlocked ? `disabled title="${esc(publishBlocked)}"` : ''}>发布</button>
@@ -500,27 +612,20 @@ function renderPublished(d) {
     </div>`
         )
         .join('')
-    : '<p class="hint">还没有发布记录。在"内容工厂"里批准并发布一条草稿试试。</p>';
+    : `<div class="card"><div class="empty">${icon('inbox')}<div>还没有发布记录</div><div class="hint">在「内容工厂」里由审核人批准、再由发布人发出一条草稿试试。</div></div></div>`;
 }
 
 function renderSettings(d) {
   $('#set-source').value = d.config.dataSource;
   $('#set-llm').value = d.config.llmMode;
   const w = d.config.weights || {};
-  const labels = {
-    momentum: '爆发动能 (momentum)',
-    velocity: '热度增速 (velocity)',
-    engagement: '互动规模 (engagement)',
-    accounts: '参与账号数 (accounts)',
-    freshness: '时效性 (freshness)',
-    relevance: 'TelyClaw 相关性 (relevance)',
-    contentOpportunity: '内容可生产性 (contentOpportunity)',
-  };
-  $('#weights-editor').innerHTML = Object.keys(labels)
+  $('#weights-editor').innerHTML = Object.keys(WEIGHT_LABELS)
     .map(
-      (k) => `<label>${labels[k]}
-      <input type="range" min="0" max="0.5" step="0.05" value="${w[k] ?? 0}" data-weight="${k}" />
-      <output data-out="${k}">${(w[k] ?? 0).toFixed(2)}</output>
+      (k) => `<label>${esc(WEIGHT_LABELS[k])}
+      <div class="slider-row">
+        <input type="range" min="0" max="0.5" step="0.05" value="${w[k] ?? 0}" data-weight="${k}" aria-label="${esc(WEIGHT_LABELS[k])}" />
+        <output data-out="${k}">${(w[k] ?? 0).toFixed(2)}</output>
+      </div>
     </label>`
     )
     .join('');
@@ -558,12 +663,13 @@ async function renderMetrics() {
           <div class="sub">首次检测 → 话题峰值（正=提前捕捉）</div></div>
       </div>
       <p class="hint">${esc(m.northStar.definition)}</p>
-      <div class="notice info" style="margin:8px 0 0">
-        ⚠️ 时效类指标的口径说明：仿真数据是"上线时回填过去 7 天"，系统首次检测时间 = 你点下按钮的时间，
+      <div class="notice warn" style="margin:10px 0 0">
+        ${icon('warn')}
+        <span>时效类指标的口径说明：仿真数据是「上线时回填过去 7 天」，系统首次检测时间 = 你点下按钮的时间，
         所以「峰值提前发现」在这个环境里必然为负、峰值前发现率 ${s.earlyCatchRate === null ? '—' : pct(s.earlyCatchRate)}。
-        它衡量的是"持续监控时能提前多久捕捉到话题"，切到真实 X API 连续采集后才有正数意义（详见 README）。
+        它衡量的是「持续监控时能提前多久捕捉到话题」，切到真实 X API 连续采集后才有正数意义（详见 README）。</span>
       </div>
-      <div class="notice info" style="margin:10px 0 0">${esc(m.disclaimer)}</div>
+      <div class="notice info" style="margin:10px 0 0">${icon('info')}<span>${esc(m.disclaimer)}</span></div>
     </div>
 
     <div class="card">
@@ -728,6 +834,10 @@ function syncTourUI() {
   $('#tour-step-no').textContent = `${state.tourIndex + 1}/${TOUR.length}`;
   $('#tour-title').textContent = step.title;
   $('#tour-tip').textContent = step.tip;
+  const bar = $('#tour-progress-i');
+  if (bar) bar.style.width = `${((state.tourIndex + 1) / TOUR.length) * 100}%`;
+  const dots = $('#tour-dots');
+  if (dots) dots.innerHTML = TOUR.map((_, i) => `<i class="${i === state.tourIndex ? 'on' : ''}"></i>`).join('');
   switchTab(step.tab);
   const el = $(step.target);
   if (el) {
@@ -745,10 +855,17 @@ function startTour() {
 }
 
 /* ---------------- Tab ---------------- */
-function switchTab(name) {
+const TAB_NAMES = ['overview', 'accounts', 'trends', 'ranking', 'studio', 'published', 'metrics', 'settings'];
+
+function switchTab(name, syncHash = true) {
+  if (!TAB_NAMES.includes(name)) name = 'overview';
   state.tab = name;
   $$('#tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === name));
   $$('.view').forEach((v) => v.classList.toggle('active', v.id === `view-${name}`));
+  // 把当前页签写进 URL：刷新不丢上下文，也方便直接把某一页发给别人
+  if (syncHash && location.hash.slice(1) !== name) {
+    try { history.replaceState(null, '', `#${name}`); } catch { location.hash = name; }
+  }
   if (name === 'metrics') renderMetrics().catch((e) => notice(esc(e.message), 'bad'));
   if (name === 'accounts') loadPostsSnapshot();
 }
@@ -968,6 +1085,33 @@ function bind() {
       toast(err.message, 'bad');
     }
   });
+
+  /* ---- 键盘快捷键：让演示与日常操作都不用找鼠标 ---- */
+  document.addEventListener('keydown', (e) => {
+    const tag = (e.target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable) return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === 'Escape') {
+      if (!$('#tour').hidden) $('#tour').hidden = true;
+      return;
+    }
+    if (e.key === '?') {
+      toast('快捷键：1–8 切换页签 · R 运行流水线 · G 生成内容 · T 演示模式 · Esc 关闭演示');
+      return;
+    }
+    const n = Number(e.key);
+    if (Number.isInteger(n) && n >= 1 && n <= TAB_NAMES.length) {
+      switchTab(TAB_NAMES[n - 1]);
+      return;
+    }
+    const k = e.key.toLowerCase();
+    if (k === 'r') return void runAll();
+    if (k === 'g') return void doGenerate();
+    if (k === 't') return void startTour();
+  });
+
+  // 支持手改地址栏 hash 直接跳到某一页
+  window.addEventListener('hashchange', () => switchTab(location.hash.slice(1), false));
 }
 
 /* ---------------- 启动 ---------------- */
@@ -976,6 +1120,8 @@ function bind() {
   try {
     state.data = await api('/api/state');
     render();
+    const initial = (location.hash || '').slice(1);
+    if (initial) switchTab(initial);
     loadPostsSnapshot();
   } catch (e) {
     notice(`无法连接后端：${esc(e.message)}`, 'bad');
