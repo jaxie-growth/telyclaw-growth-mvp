@@ -83,7 +83,8 @@ export function rankOpportunities(topics, { limit = 8, weights } = {}) {
     reasons.push(
       `热度：近 1/4 窗口每小时 ${fmt(t.velocity, 1)} 次互动（总互动 ${t.engagement.toLocaleString()}）`
     );
-    if (t.rising) reasons.push(`加速中：讨论量环比上升 ${(t.growth * 100).toFixed(0)}%`);
+    if (t.rising) reasons.push(`加速中：讨论量环比上升 ${(t.growth * 100).toFixed(0)}%（窗口期还在，适合抢时效）`);
+    else if (t.growing) reasons.push(`温和上行：环比 +${(t.growth * 100).toFixed(0)}%，仍有增量但不算爆发`);
     else if (t.growth < -0.05) reasons.push(`热度衰减：环比下降 ${Math.abs(t.growth * 100).toFixed(0)}%（更适合追忆型内容，不适合追热点）`);
     reasons.push(`来源可信度：${t.accountCount} 个独立账号参与，${t.accounts.slice(0, 3).join(' / ')} 等都在讨论`);
     reasons.push(`时效：${(t.freshness * 100).toFixed(0)}% 的帖子发生在最近 25% 的时间窗口内`);
@@ -114,10 +115,15 @@ export function rankOpportunities(topics, { limit = 8, weights } = {}) {
   const top = scored.slice(0, limit);
   const gap = top.length > 1 ? top[0].score - top[1].score : 0;
   if (top.length) {
+    const stateWord = top[0].rising
+      ? '仍在加速'
+      : top[0].growing
+        ? '热度仍在温和上行'
+        : '热度已经过峰（内容更适合做"复盘/观点"而不是追即时流量）';
     top[0].verdict =
       `在 ${topics.length} 个识别出的热点中，它是当前最值得 TelyClaw 跟进的一个` +
       (gap > 5 ? `（领先第二名 ${gap.toFixed(1)} 分，优势明显）` : `（与第二名差距仅 ${gap.toFixed(1)} 分，可同时准备第二条内容）`) +
-      `。窗口内它已被 ${top[0].accountCount} 个账号讨论，仍在加速，且${top[0].relevance >= 0.4 ? '与我们的产品叙事直接相关' : '可以借"AI 内容效率"的框架重新包装后使用'}。`;
+      `。窗口内它已被 ${top[0].accountCount} 个账号讨论，${stateWord}，且${top[0].relevance >= 0.4 ? '与我们的产品叙事直接相关' : '可以借"AI 内容效率"的框架重新包装后使用'}。`;
   }
 
   return { opportunities: top, all: scored, factorMeta: FACTOR_META, weights: w, humanizeHours };
