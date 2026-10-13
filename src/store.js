@@ -28,10 +28,36 @@ function ensureDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
+/**
+ * 容错写入：某些部署环境（如只读容器/沙箱）不允许写盘。
+ * 此时降级为"内存模式"——服务继续可用，只是重启后数据不保留，
+ * 避免整个 API 因一次写盘失败而 500。
+ */
+let writeWarned = false;
+function safeWrite(file, data) {
+  try {
+    ensureDir();
+    fs.writeFileSync(file, data, 'utf8');
+    return true;
+  } catch (err) {
+    if (!writeWarned) {
+      writeWarned = true;
+      console.warn(
+        `[store] 持久化失败，已降级为内存模式（重启后数据不保留）：${err.message}`,
+      );
+    }
+    return false;
+  }
+}
+
 let state = null;
 
 export function loadState() {
-  ensureDir();
+  try {
+    ensureDir();
+  } catch {
+    /* 目录不可创建时忽略，后续写入会自动降级 */
+  }
   if (state) return state;
   if (fs.existsSync(STATE_FILE)) {
     try {
@@ -46,8 +72,7 @@ export function loadState() {
 }
 
 export function saveState() {
-  ensureDir();
-  fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), 'utf8');
+  safeWrite(STATE_FILE, JSON.stringify(state, null, 2));
 }
 
 export function resetState({ keepAccounts = true } = {}) {
@@ -59,8 +84,7 @@ export function resetState({ keepAccounts = true } = {}) {
 }
 
 export function savePostsSnapshot(posts) {
-  ensureDir();
-  fs.writeFileSync(POSTS_FILE, JSON.stringify(posts, null, 2), 'utf8');
+  safeWrite(POSTS_FILE, JSON.stringify(posts, null, 2));
 }
 
 let idSeq = 0;

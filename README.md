@@ -7,9 +7,31 @@
 
 核心工作流：`Monitor → Detect → Rank → Ideate → Craft → Review → Publish`
 
+**🔗 在线演示（免安装，直接打开）**：https://telyclaw-growth-engine-28237.app.workbuddy.host/
+> 已在云端常驻运行，不依赖本地环境，可直接点开看完整产品，也可直接分享给他人。
+
+**📦 交付物索引**
+
+| 交付物 | 位置 |
+|---|---|
+| 可运行的 Demo（在线） | https://telyclaw-growth-engine-28237.app.workbuddy.host/ |
+| 可运行的 Demo（本地） | `node server.js` → http://localhost:5173 |
+| 源代码仓库 | https://github.com/jaxie-growth/telyclaw-growth-mvp |
+| Demo 视频分镜脚本（3–5 分钟） | [`DEMO_SCRIPT.md`](./DEMO_SCRIPT.md) |
+| 90 天增长问题答稿 | [`GROWTH_PLAN.md`](./GROWTH_PLAN.md) |
+| 本篇说明文档 | `README.md` |
+
+> 说明：Demo 视频由本人按 `DEMO_SCRIPT.md` 录制，未纳入本仓库。
+
 ---
 
 ## 1. 快速开始
+
+**方式 A · 打开在线演示（最快）**
+
+直接访问 https://telyclaw-growth-engine-28237.app.workbuddy.host/ ，无需安装任何东西。
+
+**方式 B · 本地运行（看源码/二次开发）**
 
 ```bash
 # 需要 Node.js 18+（本项目零第三方依赖，不需要 npm install）
