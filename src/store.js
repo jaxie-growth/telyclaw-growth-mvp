@@ -22,6 +22,10 @@ const DEFAULT_STATE = {
   detection: {},       // topicKey -> 首次被检测到的时间（用于计算 Detection Lead Time）
   publishedTopicSnapshots: {}, // draftId -> 发布时该话题的帖子量（用于计算 Trend Hit Rate）
   scoreHistory: [],    // 每次 analyze 的 Top 话题分数快照（用于看板）
+  alerts: [],          // 排期监控推送的"新高分机会"提醒（带去重）
+  members: [],         // 工作区成员与角色（作者/审核人/发布人分离）
+  actorId: null,       // 当前操作身份（前端可切换，服务端据此做权限校验）
+  scheduler: null,     // 排期监控运行状态（lastTickAt / tickCount / lastError）
 };
 
 function ensureDir() {
@@ -76,9 +80,15 @@ export function saveState() {
 }
 
 export function resetState({ keepAccounts = true } = {}) {
-  const accounts = keepAccounts ? loadState().accounts : [];
+  const prev = loadState();
+  // 账号、成员、当前身份属于"配置"，重置分析结果时保留
+  const accounts = keepAccounts ? prev.accounts : [];
+  const members = prev.members || [];
+  const actorId = prev.actorId ?? null;
   state = structuredClone(DEFAULT_STATE);
   state.accounts = accounts;
+  state.members = members;
+  state.actorId = actorId;
   saveState();
   return state;
 }

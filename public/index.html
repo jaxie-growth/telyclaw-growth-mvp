@@ -27,6 +27,11 @@
           <option value="7D">Last 7D</option>
         </select>
       </label>
+      <label class="win-picker">
+        当前身份
+        <select id="actor-select"></select>
+      </label>
+      <button class="btn ghost bell" id="btn-alerts">机会提醒<span class="dot" id="alert-badge" hidden>0</span></button>
       <button class="btn ghost" id="btn-tour">演示模式</button>
       <button class="btn ghost" id="btn-reset">重置数据</button>
     </div>
@@ -77,6 +82,19 @@
           <button class="btn" id="btn-only-analyze">仅做热点识别 + 排序</button>
         </div>
         <div class="log" id="run-log"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>排期监控 & 机会提醒（Scheduled Monitoring · Bonus）</h2>
+          <span class="hint" id="scheduler-hint"></span>
+        </div>
+        <div class="row">
+          <label class="check"><input type="checkbox" id="sched-enabled" /> 启用定时轮询</label>
+          <button class="btn" id="btn-sched-tick">立即执行一轮</button>
+          <span class="hint">只在"出现高分机会"时提醒 · 同一话题 6 小时内不重复打扰 · 夜间静默但破例放行真爆点</span>
+        </div>
+        <div id="alerts-list" class="alerts"></div>
       </div>
 
       <div class="card">
@@ -155,8 +173,9 @@
           <label class="check"><input type="checkbox" id="show-all-drafts" /> 显示全部草稿</label>
         </div>
         <div class="review-flow">
-          <span>Trend</span>→<span>AI Draft</span>→<span>Human Edit</span>→<span>Approve</span>→<span>Publish</span>
+          <span>Trend</span>→<span>AI Draft</span>→<span>Editor Agent 自评</span>→<span>Human Edit</span>→<span>Reviewer 批准</span>→<span>Publisher 发布</span>
         </div>
+        <p class="hint" id="studio-role-hint"></p>
       </div>
       <div id="drafts-list"></div>
     </section>
@@ -200,10 +219,35 @@
         <div class="row"><button class="btn primary" id="btn-save-weights">保存权重并重算排序</button></div>
       </div>
       <div class="card">
+        <div class="card-head"><h2>排期监控设置（Bonus 项）</h2><span class="hint">无人值守轮询；改完立即生效</span></div>
+        <div class="row">
+          <label>轮询间隔（分钟）<input type="number" id="sched-interval" min="1" max="1440" /></label>
+          <label>每轮窗口
+            <select id="sched-window">
+              <option value="1H">1H</option>
+              <option value="4H">4H</option>
+              <option value="24H">24H</option>
+              <option value="7D">7D</option>
+            </select>
+          </label>
+          <label>提醒分数阈值<input type="number" id="sched-threshold" min="0" max="100" /></label>
+          <label>去重窗口（小时）<input type="number" id="sched-dedupe" min="1" max="72" /></label>
+          <label>静默时段 起<input type="number" id="sched-quiet-from" min="0" max="23" /></label>
+          <label>静默时段 止<input type="number" id="sched-quiet-to" min="0" max="23" /></label>
+          <label>静默破例阈值<input type="number" id="sched-override" min="0" max="100" /></label>
+        </div>
+        <div class="row">
+          <button class="btn primary" id="btn-save-scheduler">保存排期设置</button>
+          <span class="hint" id="sched-status"></span>
+        </div>
+      </div>
+      <div class="card">
         <div class="card-head"><h2>生产化说明</h2></div>
         <ul class="plain">
           <li>X API 需要付费档位 + Rate Limit 约束，MVP 用仿真数据跑通链路，<code>src/ingest.js</code> 已实现真实 API 适配层，填 token 即可切换。</li>
+          <li>生产化数据获取：冷启动期用<strong>账号池方案</strong>（多账号轮换 + 每账号独立代理 + 限流自动换号，业界参考 <code>twscrape</code>）拿到种子数据，稳态再切官方 API；并用 <code>RSSHub</code> 类聚合源做降级兜底。合规边界见 README 第 4 节。</li>
           <li>LLM 同理：<code>LLM_MODE=openai</code> 后调用真实模型，Prompt 与校验逻辑不变，失败会自动回退到内置生成器。</li>
+          <li>审核工作流：作者 / 审核人 / 发布人<strong>三角色分离</strong>，权限在服务端强制校验（前端按钮禁用只是提示），对齐成熟社媒工具的工作区权限模型。</li>
           <li>持久化目前是 <code>data/state.json</code>（便于面试演示复现）；生产环境替换为 Postgres/Supabase，业务模块无需改动。</li>
         </ul>
       </div>

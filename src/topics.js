@@ -238,7 +238,13 @@ function nameCluster(cluster, df = new Map(), totalDocs = 1) {
     ? bestSeed.autoLabel
     : topTokens.slice(0, 3).map(titleCase).join(' / ');
 
-  return { name, topTokens, cashtags, seed: strong ? bestSeed : bestSeed && bestHits > 0 ? bestSeed : null, strongMatch: strong };
+  return {
+    name,
+    topTokens,
+    cashtags,
+    seed: strong ? bestSeed : align.hits > 0 ? bestSeed : null,
+    strongMatch: strong,
+  };
 }
 
 /** 计算话题的趋势指标 */
@@ -252,10 +258,27 @@ function computeTrend(cluster, posts, windowHours, now) {
   const later = list.filter((p) => p.createdAt >= mid);
   const recent = list.filter((p) => p.createdAt >= recentFrom);
 
+  /**
+   * 双口径趋势量化（两条口径互补，缺一不可）：
+   *   A. growth   窗口对半切，比较"前半 vs 后半"的每小时速率 → 看趋势**形状**（在升温还是在衰减）
+   *   B. momentum 最近短窗 vs 整窗平均基线 → 看"**现在**是不是正在爆"
+   * 只有 A 会把"一直很热但已到平台期"的话题判成 0 增速；只有 B 会把"早期小样本抖动"误判成爆发。
+   * 两者都高才是真正的"正在爆"，因此额外给一个 surging 标记。
+   */
+  const shortHours = Math.max(1, Math.min(windowHours, windowHours / 8));
+  const shortFrom = now - shortHours * HOUR;
+  const shortWindow = list.filter((p) => p.createdAt >= shortFrom);
+
   const half = (windowHours * HOUR) / 2 / HOUR;
   const earlierRate = earlier.length / half;
   const laterRate = later.length / half;
   const growth = earlierRate > 0 ? (laterRate - earlierRate) / earlierRate : laterRate > 0 ? 1 : 0;
+
+  // 口径 B：短窗 vs 长基线
+  const baselineRate = list.length / windowHours; // 帖/小时（整窗均值）
+  const shortRate = shortWindow.length / shortHours; // 帖/小时（最近短窗）
+  const momentum = baselineRate > 0 ? shortRate / baselineRate - 1 : shortRate > 0 ? 1 : 0;
+  const momentumRatio = baselineRate > 0 ? shortRate / baselineRate : shortRate > 0 ? 2 : 0;
 
   const recentEngagement = recent.reduce((s, p) => s + p.engagement, 0);
   const velocity = recentEngagement / Math.max(1, (windowHours * HOUR) / 4 / HOUR); // 近 1/4 窗口的每小时互动量
@@ -315,6 +338,14 @@ function computeTrend(cluster, posts, windowHours, now) {
     growth,
     growing: growth > 0.05,
     rising: growth > 0.2,
+    // 口径 B 与综合判定
+    momentum,
+    momentumRatio,
+    shortHours,
+    shortPostCount: shortWindow.length,
+    shortRate,
+    baselineRate,
+    surging: growth > 0.2 && momentum > 0.5,
     freshness,
     relevance,
     numberDensity,
@@ -339,12 +370,21 @@ function buildSummary({ name, trend, meta }) {
       : trend.growth < -0.05
         ? `回落 ${Math.abs(trend.growth * 100).toFixed(0)}%（热度衰减）`
         : '基本持平';
+  // 口径 B：最近短窗相对整窗基线的放大倍数，用来区分"一直很热"和"刚刚开始爆"
+  const momentumText =
+    trend.momentumRatio >= 1.15
+      ? `，最近 ${trend.shortHours.toFixed(1)} 小时发帖速率是窗口均值的 ${trend.momentumRatio.toFixed(1)} 倍${
+          trend.surging ? '（正在爆发）' : ''
+        }`
+      : trend.momentumRatio > 0 && trend.momentumRatio <= 0.85
+        ? `，最近 ${trend.shortHours.toFixed(1)} 小时发帖速率已降到窗口均值的 ${trend.momentumRatio.toFixed(1)} 倍（动能减弱）`
+        : '';
   const consensus = meta?.seed?.consensus || `围绕「${name}」的讨论在窗口内持续出现，尚未形成统一结论`;
   const debate = meta?.seed?.debate || '多空双方对持续性存在分歧，需观察后续数据兑现';
   const tags = meta.cashtags.length ? meta.cashtags.join('、') : '（暂无高频标的）';
   return (
     `${trend.accountCount} 个账号在窗口内围绕「${name}」发布 ${trend.postCount} 条内容，` +
-    `合计互动 ${trend.engagement.toLocaleString()}，讨论量环比${growthText}。` +
+    `合计互动 ${trend.engagement.toLocaleString()}，讨论量环比${growthText}${momentumText}。` +
     `市场共识：${consensus}。主要分歧：${debate}。高频标的：${tags}。` +
     `情绪结构：偏多 ${trend.tone.bullish}% / 偏空 ${trend.tone.bearish}%。`
   );

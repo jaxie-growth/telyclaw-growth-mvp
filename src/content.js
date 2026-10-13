@@ -262,6 +262,149 @@ export function qualityCheck(text, sourcePosts) {
   };
 }
 
+/* ---------------------------------------------------------------
+ * 编辑 Agent（Editor Agent）自评
+ * -------------------------------------------------------------
+ * 参考多角色 Agent 协作的做法：生成 Agent 只负责"产出"，另有一个编辑 Agent
+ * 负责"挑毛病"。它**不是硬闸门**（硬闸门仍然是上面的原创度校验），
+ * 而是在人审核之前先给出"哪里弱、怎么改"，把人从"读一遍找问题"里解放出来。
+ *
+ * 五个评审维度（权重和为 1）：
+ *   hook 开头钩子 .22 | specificity 具体性 .20 | originality 原创度 .24
+ *   audienceFit 受众匹配 .18 | clarity 表达清晰度 .16
+ * ------------------------------------------------------------- */
+export const EDITOR_DIMENSIONS = [
+  { key: 'hook', label: '开头钩子', weight: 0.22, desc: '第一句能不能让人停下来' },
+  { key: 'specificity', label: '具体性', weight: 0.2, desc: '有没有可验证的数字/标的' },
+  { key: 'originality', label: '原创度', weight: 0.24, desc: '相对源帖的独立程度（取自硬校验）' },
+  { key: 'audienceFit', label: '受众匹配', weight: 0.18, desc: '是否说给 TelyClaw 的 ICP 听' },
+  { key: 'clarity', label: '表达清晰度', weight: 0.16, desc: '可读性与结构' },
+];
+
+const clamp100 = (v) => Math.max(0, Math.min(100, Math.round(v)));
+
+function heuristicReview(text, topic, quality) {
+  const words = text.match(/[A-Za-z][A-Za-z'\-]*/g) || [];
+  const sentences = text.split(/[.!?。！？\n]+/).map((s) => s.trim()).filter(Boolean);
+  const head = (sentences[0] || '').slice(0, 64);
+  const numbers = text.match(/[-+]?\$?\d[\d.,]*(%|bn|m|k|bp|x|pts)?/g) || [];
+  const hasCashtag = /\$[A-Za-z]/.test(text);
+  const lines = text.split('\n').map((s) => s.trim()).filter(Boolean);
+
+  let hook = 55;
+  if (/^(Unpopular|Most|If you|3 things|Speed|Primer|Nobody|Our category|We watched|Why|The)/i.test(head)) hook += 18;
+  if (/^(We|Our|I)\b/i.test(head)) hook -= 14; // 开头就自述，是最弱的钩子
+  if (/\d/.test(head)) hook += 10;
+  if (/\?/.test(head)) hook += 6;
+  if (head.length >= 20 && head.length <= 140) hook += 6;
+
+  let specificity = 34 + Math.min(36, numbers.length * 9) + (hasCashtag ? 12 : 0);
+  if (quality?.hasNumber) specificity += 6;
+
+  const originality = clamp100(quality?.originality ?? 0);
+
+  const AUD = /(workflow|content|research|analyst|agent|AI|model|data|tool|team|desk|creat)/i;
+  let audienceFit = 44 + (topic.relevance || 0) * 40 + (AUD.test(text) ? 12 : 0);
+
+  const avgWordLen = words.length ? words.join('').length / words.length : 0;
+  let clarity = 70;
+  if (lines.length >= 3) clarity += 12;
+  if (/→|1\)|2\)|3\)/.test(text)) clarity += 8;
+  if (avgWordLen > 6.2) clarity -= 10;
+  if (sentences.length > 6) clarity -= 8;
+
+  const scores = {
+    hook: clamp100(hook),
+    specificity: clamp100(specificity),
+    originality,
+    audienceFit: clamp100(audienceFit),
+    clarity: clamp100(clarity),
+  };
+
+  const notes = [];
+  if (scores.hook < 65) notes.push('开头太弱：第一句就直接"我们要说…"，读者会划走。改成一个反共识断言、一个具体数字或一个问句。');
+  if (scores.specificity < 60) notes.push(`具体性不足：加 1-2 个可验证的数字（当前识别到 ${numbers.length} 个）或一个相关标的（cashtag）。`);
+  if (scores.originality < 70) notes.push('原创度偏低：与源帖的表达太接近，换掉与源帖重合的短语，改用自己的判断句。');
+  if (scores.audienceFit < 60) notes.push('受众匹配偏弱：明确写"这对做内容/做研究的人意味着什么"，让 TelyClaw 的 ICP 一眼看到自己。');
+  if (scores.clarity < 65) notes.push('可读性可以更好：拆短句子，或用"发生了什么 → 为什么重要 → 看什么"的分行结构。');
+  if (quality?.charCount > 260) notes.push(`接近 280 字符上限（${quality.charCount}），建议删掉一个从句留出余量。`);
+  if (!notes.length) notes.push('五个维度都过了基准线，可以直接进入人工审核。');
+
+  return { scores, notes, origin: 'heuristic', reviewedAt: Date.now() };
+}
+
+async function llmEditorReview(text, topic) {
+  const url = `${config.llmBaseUrl.replace(/\/$/, '')}/chat/completions`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${config.llmApiKey}` },
+    body: JSON.stringify({
+      model: config.llmModel,
+      temperature: 0.3,
+      messages: [
+        {
+          role: 'system',
+          content:
+            `你是 ${TEAM_CONTEXT.product} 的内容编辑（Editor Agent），负责审稿而不是写稿。\n` +
+            `受众：${TEAM_CONTEXT.audience}\n文风基准：${TEAM_CONTEXT.voice}\n` +
+            `输出严格 JSON，不要解释文字。`,
+        },
+        {
+          role: 'user',
+          content:
+            `待审推文：${text}\n` +
+            `它对应的话题：${topic.name}\n\n` +
+            `请对这条推文打分（0-100 整数）：hook 开头钩子、specificity 具体性、originality 原创度、audienceFit 受众匹配、clarity 表达清晰度。\n` +
+            `并给出最多 4 条**可执行**的中文修改建议（不要说"可以更好"这种废话，要说清改哪一句、改成什么方向）。\n` +
+            `返回 JSON：{"scores":{"hook":0,"specificity":0,"originality":0,"audienceFit":0,"clarity":0},"notes":["..."]}`,
+        },
+      ],
+    }),
+  });
+  if (!res.ok) throw new Error(`编辑 Agent 调用失败：HTTP ${res.status}`);
+  const json = await res.json();
+  const content = json?.choices?.[0]?.message?.content || '';
+  const match = content.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error('编辑 Agent 未返回合法 JSON');
+  const parsed = JSON.parse(match[0]);
+  const scores = {};
+  for (const d of EDITOR_DIMENSIONS) scores[d.key] = clamp100(Number(parsed?.scores?.[d.key] ?? 0));
+  return { scores, notes: (parsed.notes || []).map(String).slice(0, 4), origin: 'llm', reviewedAt: Date.now() };
+}
+
+/** 汇总加权分 + 结论；供 generateContent 与 /api/draft/review 共用 */
+export function finalizeReview(base, quality) {
+  const scores = base.scores;
+  const overall = Math.round(
+    EDITOR_DIMENSIONS.reduce((sum, d) => sum + (scores[d.key] ?? 0) * d.weight, 0)
+  );
+  const verdict = overall >= 78 ? 'ship' : overall >= 62 ? 'polish' : 'rewrite';
+  return {
+    ...base,
+    overall,
+    verdict,
+    verdictLabel: { ship: '可发布', polish: '建议润色', rewrite: '建议重写' }[verdict],
+    dimensions: EDITOR_DIMENSIONS.map((d) => ({ ...d, score: scores[d.key] ?? 0 })),
+    // 硬闸门仍然只有原创度校验；编辑 Agent 的结论只做提示，不拦截
+    blocking: !(quality?.pass ?? true),
+  };
+}
+
+/** 对单条正文跑一次编辑 Agent 评审（人工改完可以再跑一次） */
+export async function runEditorReview(text, topic, quality) {
+  let base;
+  if (config.llmMode === 'openai' && config.llmApiKey) {
+    try {
+      base = await llmEditorReview(text, topic);
+    } catch {
+      base = heuristicReview(text, topic, quality);
+    }
+  } else {
+    base = heuristicReview(text, topic, quality);
+  }
+  return finalizeReview(base, quality);
+}
+
 /** 预估表现（模拟）：用于看板的 Engagement Lift / Qualified Engagement 指标 */
 function predictPerformance(topic, angle) {
   const angleMult = { hot_take: 1.25, educational: 1.0, product: 0.85 }[angle] || 1;
@@ -306,6 +449,11 @@ export async function generateContent(topic, { windowHours = 24, history = [] } 
         predicted: predictPerformance(topic, d.angle),
         status: quality.pass ? 'draft' : 'needs_revision',
         editedCount: 0,
+        // 工作流归属（对齐"作者 / 审核人 / 发布人分离"的团队审核模型）
+        createdBy: 'AI Generator',
+        assignedTo: null,
+        reviewedBy: null,
+        publishedBy: null,
         history: [{ at: Date.now(), action: 'created', note: `由 ${d.origin} 生成器产出，原创度 ${quality.originality}%` }],
         windowHours,
       };
@@ -318,6 +466,14 @@ export async function generateContent(topic, { windowHours = 24, history = [] } 
     d.readyToPublish = ready ? d.id === ready.id : false;
   });
   if (!ready) warnings.push('本次生成的内容都没有通过原创度/长度校验，请人工改写后再发布。');
+
+  // 第二道视角：编辑 Agent 对每条草稿做一次自评（不拦截，只给可执行建议）
+  for (const d of drafts) {
+    d.review = await runEditorReview(d.text, topic, d.quality);
+  }
+  if (drafts.some((d) => d.review?.verdict === 'rewrite')) {
+    warnings.push('编辑 Agent 建议至少 1 条草稿重写（见草稿卡片的"编辑 Agent 评审"），人工审核时可重点看这几条。');
+  }
 
   return { drafts, warnings, facts };
 }

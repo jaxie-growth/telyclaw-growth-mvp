@@ -42,17 +42,33 @@ export const config = {
   /**
    * Opportunity Score 权重（可在设置页调整，体现"自己定义机会分数"）
    * 三类因子：
-   *   A. 话题动能：velocity / engagement / accounts
+   *   A. 话题动能：momentum / velocity / engagement / accounts
    *   B. 时效与匹配：freshness / relevance
    *   C. 可生产性：contentOpportunity
    */
   weights: {
-    velocity: 0.3,
-    engagement: 0.2,
-    accounts: 0.15,
-    freshness: 0.1,
-    relevance: 0.15,
+    momentum: 0.18,
+    velocity: 0.22,
+    engagement: 0.16,
+    accounts: 0.12,
+    freshness: 0.08,
+    relevance: 0.14,
     contentOpportunity: 0.1,
+  },
+
+  /**
+   * 排期监控（Scheduled Monitoring，Bonus 项）
+   * 定时自动跑"抓取 → 识别 → 排序"，只在发现"新高分机会"时推送提醒。
+   */
+  scheduler: {
+    enabled: false,
+    intervalMinutes: 30,   // 轮询间隔
+    window: '4H',          // 每次轮询使用的时间窗口（近实时用短窗口）
+    alertScore: 55,        // 机会分数阈值：达到即视为"值得跟进的机会"
+    quietHours: [23, 7],   // 静默时段（本地时间，[起, 止)），期间不打扰
+    quietOverrideScore: 80,// 静默时段内分数仍达到该值 → 例外放行（真正的爆点）
+    dedupeHours: 6,        // 同一话题在多少小时内不重复提醒
+    maxAlerts: 50,
   },
 
   // TelyClaw 相关性词典：与产品（AI-native 内容增长引擎）及目标受众的匹配度
@@ -64,6 +80,29 @@ export const config = {
   ],
 };
 
+/**
+ * 审核工作流的角色模型（对齐成熟社媒工具"工作区 + 权限"的做法）。
+ * 关键设计：作者 / 审核人 / 发布人分离，避免"自己写自己批自己发"。
+ */
+export const ROLES = {
+  editor: { key: 'editor', label: '内容编辑', can: ['edit', 'generate', 'assign'] },
+  reviewer: { key: 'reviewer', label: '审核人', can: ['edit', 'approve', 'reject', 'assign'] },
+  publisher: { key: 'publisher', label: '发布人', can: ['publish'] },
+  admin: { key: 'admin', label: '管理员', can: ['edit', 'generate', 'approve', 'reject', 'publish', 'assign'] },
+};
+
+export const DEFAULT_MEMBERS = [
+  { id: 'u-alice', name: 'Alice', role: 'editor' },
+  { id: 'u-bob', name: 'Bob', role: 'reviewer' },
+  { id: 'u-carol', name: 'Carol', role: 'publisher' },
+  { id: 'u-dave', name: 'Dave', role: 'admin' },
+];
+
+export function can(roleKey, action) {
+  const role = ROLES[roleKey];
+  return Boolean(role && role.can.includes(action));
+}
+
 export function publicConfig() {
   return {
     dataSource: config.dataSource,
@@ -73,6 +112,8 @@ export function publicConfig() {
     hasLlmKey: Boolean(config.llmApiKey),
     weights: config.weights,
     relevanceKeywords: config.relevanceKeywords,
+    scheduler: config.scheduler,
+    roles: Object.values(ROLES).map((r) => ({ key: r.key, label: r.label, can: r.can })),
   };
 }
 
@@ -84,6 +125,19 @@ export function applyRuntimeConfig(patch = {}) {
     for (const [k, v] of Object.entries(patch.weights)) {
       const n = Number(v);
       if (Number.isFinite(n) && n >= 0) config.weights[k] = n;
+    }
+  }
+  if (patch.scheduler && typeof patch.scheduler === 'object') {
+    const sc = config.scheduler;
+    if (typeof patch.scheduler.enabled === 'boolean') sc.enabled = patch.scheduler.enabled;
+    for (const k of ['intervalMinutes', 'alertScore', 'quietOverrideScore', 'dedupeHours', 'maxAlerts']) {
+      const n = Number(patch.scheduler[k]);
+      if (Number.isFinite(n) && n > 0) sc[k] = n;
+    }
+    if (typeof patch.scheduler.window === 'string') sc.window = patch.scheduler.window;
+    if (Array.isArray(patch.scheduler.quietHours) && patch.scheduler.quietHours.length === 2) {
+      const [a, b] = patch.scheduler.quietHours.map(Number);
+      if (Number.isFinite(a) && Number.isFinite(b)) sc.quietHours = [a, b];
     }
   }
   return publicConfig();

@@ -239,3 +239,39 @@ code { background: #f1f4f9; border-radius: 4px; padding: 1px 5px; font-size: 12p
 }
 .toast.bad { background: var(--bad); }
 .toast.ok { background: var(--ok); }
+
+/* ---------- 身份切换 & 提醒入口 ---------- */
+.bell { position: relative; }
+.bell .dot {
+  display: inline-block; margin-left: 6px; min-width: 18px; text-align: center;
+  background: var(--bad); color: #fff; border-radius: 9px; font-size: 11px; padding: 1px 6px;
+}
+
+/* ---------- 排期监控 & 机会提醒 ---------- */
+.alerts { display: grid; gap: 10px; margin-top: 12px; }
+.alert {
+  border: 1px solid var(--line); border-left: 3px solid var(--teal);
+  border-radius: 10px; padding: 10px 12px; background: #fbfdff;
+}
+.alert.surging { border-left-color: var(--ok); background: #f4fbf6; }
+.alert.read { opacity: .62; }
+.alert-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.alert-head b { color: var(--navy); font-size: 13.5px; }
+
+/* ---------- 编辑 Agent 评审 ---------- */
+.review-box {
+  margin: 8px 0; padding: 10px 12px; border-radius: 10px;
+  background: #f6f9fd; border: 1px solid #e3ecf6;
+}
+.review-head { display: flex; justify-content: space-between; align-items: center; font-size: 12.5px; margin-bottom: 6px; }
+.review-box .reasons li { color: #3c4859; }
+
+/* ---------- 审核人分配 ---------- */
+.assign-row {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin: 8px 0; padding-top: 8px; border-top: 1px dashed #eef2f7;
+}
+.assign-row select { font-size: 12px; padding: 4px 6px; border-radius: 8px; border: 1px solid var(--line); }
+
+/* 按钮被权限禁用时给出明确的视觉反馈 */
+.btn[disabled] { opacity: .45; cursor: not-allowed; }

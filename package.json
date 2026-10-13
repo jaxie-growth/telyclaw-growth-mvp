@@ -10,6 +10,7 @@
     "dev": "node server.js",
     "smoke": "node scripts/smoke.js 24",
     "ui-smoke": "node scripts/ui-smoke.js",
+    "flow-test": "node scripts/flow-test.js",
     "test": "node scripts/smoke.js 24 && node scripts/smoke.js 4"
   },
   "engines": {

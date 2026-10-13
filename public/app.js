@@ -88,7 +88,9 @@ function render() {
   $('#badge-llm').textContent = `生成: ${d.config.llmMode}${d.config.llmMode === 'openai' && !d.config.hasLlmKey ? '(缺 key→回退)' : ''}`;
   $('#window-select').value = d.lastWindow || '24H';
 
+  renderActor(d);
   renderOverview(d);
+  renderAlerts(d);
   renderAccounts(d);
   renderPosts(d);
   renderTopics(d);
@@ -97,6 +99,72 @@ function render() {
   renderPublished(d);
   renderSettings(d);
   syncTourUI();
+}
+
+/** 当前身份（决定能点哪些按钮） */
+function renderActor(d) {
+  const sel = $('#actor-select');
+  const members = d.members || [];
+  const prev = sel.value;
+  sel.innerHTML = members
+    .map((m) => `<option value="${esc(m.id)}">${esc(m.name)}（${esc(m.roleLabel)}）</option>`)
+    .join('');
+  if (d.actor) sel.value = d.actor.id;
+  else if (prev) sel.value = prev;
+}
+
+/** 当前身份是否具备某项权限 */
+function canDo(action) {
+  const a = state.data?.actor;
+  return Boolean(a && Array.isArray(a.can) && a.can.includes(action));
+}
+
+const PERM_HINT = {
+  generate: '需要「内容编辑」或「管理员」身份',
+  edit: '需要「内容编辑」「审核人」或「管理员」身份',
+  approve: '需要「审核人」或「管理员」身份',
+  reject: '需要「审核人」或「管理员」身份',
+  publish: '需要「发布人」或「管理员」身份',
+  assign: '需要「内容编辑」「审核人」或「管理员」身份',
+};
+
+/* ---------------- 排期监控 & 机会提醒 ---------------- */
+function renderAlerts(d) {
+  const sch = d.scheduler || {};
+  const alerts = d.alerts || [];
+  const unread = d.unreadAlerts || 0;
+
+  const badge = $('#alert-badge');
+  badge.hidden = unread === 0;
+  badge.textContent = unread;
+
+  $('#sched-enabled').checked = Boolean(sch.enabled);
+  $('#scheduler-hint').textContent = sch.enabled
+    ? `运行中 · 每 ${sch.intervalMinutes} 分钟一轮（窗口 ${sch.window}）· 已轮询 ${sch.tickCount} 次 · 上次 ${relTime(sch.lastTickAt)}`
+    : `已停止 · 上次轮询 ${sch.tickCount ? relTime(sch.lastTickAt) : '从未执行'}${sch.lastError ? ' · 错误：' + sch.lastError : ''}`;
+
+  $('#alerts-list').innerHTML = alerts.length
+    ? alerts
+        .map(
+          (a) => `<div class="alert ${a.read ? 'read' : ''} ${a.surging ? 'surging' : ''}">
+        <div class="alert-head">
+          <div>
+            <b>${esc(a.topicName)}</b>
+            ${a.surging ? '<span class="tag ok">正在起爆</span>' : ''}
+            <span class="score-pill">${a.score} 分</span>
+          </div>
+          <div class="hint">${relTime(a.at)}${a.read ? ' · 已读' : ''}</div>
+        </div>
+        <div class="hint">${esc(a.reason || '')}</div>
+        ${a.timingAdvice ? `<div class="hint">行动建议：${esc(a.timingAdvice)}</div>` : ''}
+        <div class="row">
+          <button class="btn tiny primary" data-gen="${esc(a.topicKey)}">为该热点生成内容</button>
+          ${a.read ? '' : `<button class="btn tiny" data-alert-read="${esc(a.id)}">标记已读</button>`}
+        </div>
+      </div>`
+        )
+        .join('')
+    : '<p class="hint">还没有提醒。打开上面的"启用定时轮询"后点"立即执行一轮"，或等待下一次自动轮询——只有分数达到阈值的**新**机会才会出现在这里。</p>';
 }
 
 function metricsOf(analysis) {
@@ -139,18 +207,22 @@ function renderOverview(d) {
     ? `<div class="topic ${top.rising ? 'rising' : ''}">
          <div class="topic-head">
            <div>
-             <div class="topic-title">#1 ${esc(top.name)} ${top.rising ? '<span class="tag ok">加速中</span>' : ''}</div>
+             <div class="topic-title">#1 ${esc(top.name)} ${
+               top.surging ? '<span class="tag ok">正在起爆</span>' : top.rising ? '<span class="tag ok">加速中</span>' : ''
+             }</div>
              <div class="topic-stats">
                <span>机会分数 <b>${top.score}</b></span>
                <span>帖子 <b>${top.postCount}</b></span>
                <span>账号 <b>${top.accountCount}</b></span>
                <span>环比 <b>${signed(top.growth)}</b></span>
+               <span>短窗动能 <b>${Number.isFinite(top.momentumRatio) ? top.momentumRatio.toFixed(1) + 'x' : '—'}</b></span>
              </div>
            </div>
            <button class="btn primary" data-gen="${esc(top.key)}">为它生成内容</button>
          </div>
          <div class="topic-summary">${esc(top.summary)}</div>
          ${top.verdict ? `<div class="verdict">${esc(top.verdict)}</div>` : ''}
+         ${top.timingAdvice ? `<div class="hint">⏱ ${esc(top.timingAdvice)}</div>` : ''}
        </div>`
     : '<p class="hint">还没有分析结果，先在上方运行"完整流水线"。</p>';
 }
@@ -214,12 +286,21 @@ function renderTopics(d) {
       (t) => `<div class="card topic ${t.rising ? 'rising' : ''}" id="topic-${esc(t.key)}">
       <div class="topic-head">
         <div>
-          <div class="topic-title">${esc(t.name)} ${t.rising ? '<span class="tag ok">加速中</span>' : t.growth < -0.05 ? '<span class="tag warn">热度衰减</span>' : ''}</div>
+          <div class="topic-title">${esc(t.name)} ${
+            t.surging
+              ? '<span class="tag ok">正在起爆</span>'
+              : t.rising
+                ? '<span class="tag ok">加速中</span>'
+                : t.growth < -0.05
+                  ? '<span class="tag warn">热度衰减</span>'
+                  : ''
+          }</div>
           <div class="topic-stats">
             <span>帖子 <b>${t.postCount}</b></span>
             <span>独立账号 <b>${t.accountCount}</b></span>
             <span>总互动 <b>${fmt(t.engagement)}</b></span>
             <span>环比 <b>${signed(t.growth)}</b></span>
+            <span>短窗动能 <b>${Number.isFinite(t.momentumRatio) ? t.momentumRatio.toFixed(1) + 'x' : '—'}</b></span>
             <span>每小时互动 <b>${Math.round(t.velocity)}</b></span>
             <span>TelyClaw 相关性 <b>${pct(t.relevance)}</b></span>
           </div>
@@ -261,10 +342,17 @@ function renderRanking(d) {
     .map((t) => {
       const factors = Object.entries(t.factors || {})
         .map(([key, f]) => {
+          // 不同量纲的原始值用不同格式，否则 0.78 会被四舍五入成 "1" 看不出差别
+          const rawText =
+            key === 'momentum'
+              ? `${(f.raw * 100).toFixed(0)}%`
+              : key === 'relevance' || key === 'freshness' || key === 'contentOpportunity'
+                ? `${(f.raw * 100).toFixed(0)}%`
+                : Number(f.raw).toLocaleString('en-US');
           return `<div class="factor">
             ${esc(f.label)}（权重 ${(f.weight * 100).toFixed(0)}%）
             <div class="bar"><i style="width:${Math.max(2, f.normalized * 100)}%"></i></div>
-            <span>因子分 ${f.normalized.toFixed(2)} · 贡献 ${f.contribution} 分 · 原始值 ${Math.round(f.raw)}</span>
+            <span>因子分 ${f.normalized.toFixed(2)} · 贡献 ${f.contribution} 分 · 原始值 ${rawText}</span>
           </div>`;
         })
         .join('');
@@ -279,6 +367,7 @@ function renderRanking(d) {
           </div>
         </div>
         ${t.rank === 1 && t.verdict ? `<div class="verdict">${esc(t.verdict)}</div>` : ''}
+        ${t.timingAdvice ? `<div class="hint">⏱ <b>时效建议</b>：${esc(t.timingAdvice)}</div>` : ''}
         <div class="factors">${factors}</div>
         <div class="hint">建议切入角度：${(t.suggestedAngles || []).map(esc).join('；')}</div>
         <ul class="reasons">${(t.reasons || []).map((r) => `<li>${esc(r)}</li>`).join('')}</ul>
@@ -307,6 +396,12 @@ function renderStudio(d) {
   $('#drafts-list').innerHTML = drafts.length
     ? drafts.map(draftCard).join('')
     : '<div class="card"><p class="hint">还没有草稿。选中一个热点后点"为选中热点生成内容"。</p></div>';
+
+  const a = d.actor;
+  const permLabels = { generate: '生成', edit: '编辑', approve: '批准', reject: '驳回', publish: '发布', assign: '分配' };
+  $('#studio-role-hint').innerHTML = a
+    ? `当前身份：<b>${esc(a.name)}</b>（${esc(a.roleLabel)}）· 可执行：${(a.can || []).map((c) => permLabels[c] || c).join(' / ')} · 右上角可切换身份。<b>作者 / 审核人 / 发布人分离</b>：发布前必须由审核人批准，发布人无法绕开审核。`
+    : '';
 }
 
 const STATUS_LABEL = {
@@ -320,6 +415,20 @@ const STATUS_LABEL = {
 function draftCard(x) {
   const q = x.quality || {};
   const p = x.predicted || {};
+  const r = x.review || null;
+  const members = state.data?.members || [];
+  const assignee = members.find((m) => m.id === x.assignedTo);
+  const reviewer = members.find((m) => m.id === x.reviewedBy);
+  const guardAttr = (action) =>
+    canDo(action) ? '' : `disabled title="${esc(PERM_HINT[action] || '当前身份无权限')}"`;
+
+  // 发布闸门在前端也如实反映：未批准 + 无发布权限，两条都拦
+  const publishBlocked = !canDo('publish')
+    ? PERM_HINT.publish
+    : x.status !== 'approved'
+      ? '需要先由审核人批准'
+      : '';
+
   return `<div class="draft ${x.status}">
     <div class="draft-head">
       <div class="angle">${esc(x.angleLabel)} <span class="hint">· ${esc(x.topicName)}</span></div>
@@ -334,13 +443,45 @@ function draftCard(x) {
       <span>编辑 ${x.editedCount} 次 · 来源 ${esc(x.origin)}</span>
     </div>
     ${(q.problems || []).length ? `<div class="notice bad" style="margin:0 0 8px">${q.problems.map(esc).join('；')}</div>` : ''}
+
+    ${
+      r
+        ? `<div class="review-box">
+      <div class="review-head">
+        <span><b>编辑 Agent 评审</b> <span class="score-pill">${r.overall} 分 · ${esc(r.verdictLabel)}</span></span>
+        <span class="hint">来源 ${esc(r.origin === 'llm' ? 'LLM 评审' : '规则评审')}</span>
+      </div>
+      <div class="qc">${(r.dimensions || [])
+        .map((dim) => `<span class="${dim.score >= 70 ? 'ok' : dim.score >= 55 ? '' : 'bad'}">${esc(dim.label)} ${dim.score}</span>`)
+        .join('')}</div>
+      <ul class="reasons">${(r.notes || []).map((n) => `<li>${esc(n)}</li>`).join('')}</ul>
+    </div>`
+        : '<div class="hint">该草稿还没有编辑 Agent 评审，点下面的「编辑 Agent 复评」生成。</div>'
+    }
+
     <div class="pred">预估表现（模拟）：曝光 ${fmt(p.impressions)} · 互动 ${fmt(p.engagement)} · ICP 占比 ${pct(p.icpShare)} · 合格互动 ${fmt(p.qualifiedEngagement)}</div>
+
+    <div class="assign-row">
+      <span class="hint">审核人分配</span>
+      <select data-assign-select="${x.id}" ${canDo('assign') ? '' : 'disabled'}>
+        <option value="">— 未分配 —</option>
+        ${members
+          .filter((m) => m.role !== 'publisher')
+          .map((m) => `<option value="${esc(m.id)}" ${x.assignedTo === m.id ? 'selected' : ''}>${esc(m.name)}（${esc(m.roleLabel)}）</option>`)
+          .join('')}
+      </select>
+      <span class="hint">${assignee ? '已分配给 ' + esc(assignee.name) : '未指派'}${
+        reviewer ? ' · 批准人 ' + esc(reviewer.name) : ''
+      }${x.publishedBy ? ' · 发布人 ' + esc(members.find((m) => m.id === x.publishedBy)?.name || '—') : ''}</span>
+    </div>
+
     <div class="actions">
-      <button class="btn tiny" data-save="${x.id}">保存人工编辑</button>
-      <button class="btn tiny" data-regen="${x.id}">重新生成</button>
-      <button class="btn tiny" data-approve="${x.id}">批准</button>
-      <button class="btn tiny" data-reject="${x.id}">驳回</button>
-      <button class="btn tiny primary" data-publish="${x.id}">发布</button>
+      <button class="btn tiny" data-save="${x.id}" ${guardAttr('edit')}>保存人工编辑</button>
+      <button class="btn tiny" data-review="${x.id}">编辑 Agent 复评</button>
+      <button class="btn tiny" data-regen="${x.id}" ${guardAttr('generate')}>重新生成</button>
+      <button class="btn tiny" data-approve="${x.id}" ${guardAttr('approve')}>批准</button>
+      <button class="btn tiny" data-reject="${x.id}" ${guardAttr('reject')}>驳回</button>
+      <button class="btn tiny primary" data-publish="${x.id}" ${publishBlocked ? `disabled title="${esc(publishBlocked)}"` : ''}>发布</button>
     </div>
   </div>`;
 }
@@ -351,7 +492,9 @@ function renderPublished(d) {
     ? list
         .map(
           (p) => `<div class="pub">
-      <div class="hint">${esc(p.topicName)} · ${esc(p.angleLabel)} · ${new Date(p.publishedAt).toLocaleString('zh-CN')} · ${esc(p.mode)}</div>
+      <div class="hint">${esc(p.topicName)} · ${esc(p.angleLabel)} · ${new Date(p.publishedAt).toLocaleString('zh-CN')} · ${esc(p.mode)}${
+        p.reviewedBy ? ` · 审核：${esc(p.reviewedBy)}` : ''
+      }${p.publishedBy ? ` · 发布：${esc(p.publishedBy)}` : ''}</div>
       <div class="text">${esc(p.text)}</div>
       <div class="pred">预估：曝光 ${fmt(p.predicted?.impressions)} · 互动 ${fmt(p.predicted?.engagement)} · 合格互动 ${fmt(p.predicted?.qualifiedEngagement)} · <a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.url)}</a></div>
     </div>`
@@ -365,6 +508,7 @@ function renderSettings(d) {
   $('#set-llm').value = d.config.llmMode;
   const w = d.config.weights || {};
   const labels = {
+    momentum: '爆发动能 (momentum)',
     velocity: '热度增速 (velocity)',
     engagement: '互动规模 (engagement)',
     accounts: '参与账号数 (accounts)',
@@ -384,6 +528,19 @@ function renderSettings(d) {
     el.oninput = () => $(`[data-out="${el.dataset.weight}"]`).textContent = Number(el.value).toFixed(2);
   });
   $('#settings-status').innerHTML = `X Token: ${d.config.hasXToken ? '已配置' : '未配置'} · LLM Key: ${d.config.hasLlmKey ? '已配置' : '未配置'}`;
+
+  // 排期监控设置
+  const sch = d.scheduler || d.config.scheduler || {};
+  $('#sched-interval').value = sch.intervalMinutes ?? 30;
+  $('#sched-window').value = sch.window ?? '4H';
+  $('#sched-threshold').value = sch.alertScore ?? 55;
+  $('#sched-dedupe').value = sch.dedupeHours ?? 6;
+  $('#sched-quiet-from').value = (sch.quietHours || [23, 7])[0];
+  $('#sched-quiet-to').value = (sch.quietHours || [23, 7])[1];
+  $('#sched-override').value = sch.quietOverrideScore ?? 80;
+  $('#sched-status').innerHTML = `${sch.running ? '🟢 轮询中' : '⚪️ 已停止'} · 已轮询 ${sch.tickCount || 0} 次${
+    sch.lastTickAt ? ' · 上次 ' + relTime(sch.lastTickAt) : ''
+  } · 当前${sch.quietNow ? '<b>处于静默时段</b>（低于破例阈值的提醒会被抑制）' : '非静默时段'}`;
 }
 
 async function renderMetrics() {
@@ -554,13 +711,14 @@ async function draftAction(path, body, msg) {
 /* ---------------- 演示模式 ---------------- */
 const TOUR = [
   { tab: 'overview', title: '1. 先看全局', tip: '这是整条闭环：Monitor → Detect → Rank → Ideate → Craft → Review → Publish。点"运行完整流水线"一次跑通。', target: '#btn-run-all' },
-  { tab: 'accounts', title: '2. 账号监控', tip: '这里配置要监控的财经类 X 账号（当前 14 个，满足"至少 5 个"的验收标准），可选 1H/4H/24H/7D 时间窗口。', target: '#btn-ingest' },
-  { tab: 'trends', title: '3. AI 热点识别', tip: '系统把散乱帖子聚合成话题、自动命名、生成摘要，并判断哪些话题正在加速。', target: '#btn-analyze' },
-  { tab: 'ranking', title: '4. 机会打分', tip: '讨论多 ≠ 值得跟进。这里展示 6 个因子的分数拆解和"为什么它排第一"的理由。', target: '#ranking-list' },
-  { tab: 'studio', title: '5. 内容生成', tip: '每个热点生成 3 个角度（Hot Take / 干货 / 产品视角）+ 至少 1 条可直接发布的推文，并强制做原创度校验。', target: '#btn-generate' },
-  { tab: 'studio', title: '6. 人工审核闭环', tip: 'AI 草稿 → 人工编辑 → 批准 → 发布。可以在文本框里改，然后批准并发布。', target: '#drafts-list' },
-  { tab: 'published', title: '7. 发布记录', tip: '已发布内容与预估表现（MVP 为模拟发布；真实 X 写入是 Bonus 项）。', target: '#published-list' },
-  { tab: 'metrics', title: '8. 数据看板', tip: '北星指标 = 合格互动（互动 × ICP 匹配度）；还有检测提前量、命中率、通过率、互动提升。', target: '#metrics-body' },
+  { tab: 'overview', title: '2. 无人值守：排期监控', tip: '热点窗口只有几小时，人不可能一直盯屏。打开定时轮询后系统自己跑；只有在出现"新高分机会"时才提醒你，同一话题 6 小时内不重复打扰，夜间静默但真爆点破例放行。', target: '#alerts-list' },
+  { tab: 'accounts', title: '3. 账号监控', tip: '这里配置要监控的财经类 X 账号（当前 14 个，满足"至少 5 个"的验收标准），可选 1H/4H/24H/7D 时间窗口。', target: '#btn-ingest' },
+  { tab: 'trends', title: '4. AI 热点识别', tip: '系统把散乱帖子聚合成话题、自动命名、生成摘要。注意"短窗动能"——它用最近短窗对比整窗基线，专门用来区分"一直很热"和"刚刚开始爆"。', target: '#btn-analyze' },
+  { tab: 'ranking', title: '5. 机会打分', tip: '讨论多 ≠ 值得跟进。这里展示 7 个因子的分数拆解（含爆发动能）、"为什么它排第一"的理由，以及一条可执行的时效建议。', target: '#ranking-list' },
+  { tab: 'studio', title: '6. 生成 + 编辑 Agent 自评', tip: '每个热点生成 3 个角度；生成后另有一个"编辑 Agent"从钩子/具体性/原创度/受众/清晰度五个维度打分并给出可执行的修改建议——把"读一遍找毛病"这件事也交给机器。', target: '#btn-generate' },
+  { tab: 'studio', title: '7. 人工审核 + 角色分离', tip: '作者 / 审核人 / 发布人分离：右上角切换身份，Alice（编辑）批不了、Carol（发布人）没批准也发不了——权限在服务端强制校验，不是前端把按钮变灰而已。', target: '#studio-role-hint' },
+  { tab: 'published', title: '8. 发布记录', tip: '每条发布都记录"谁审核的、谁发布的"（MVP 为模拟发布；真实 X 写入是 Bonus 项）。', target: '#published-list' },
+  { tab: 'metrics', title: '9. 数据看板', tip: '北星指标 = 合格互动（互动 × ICP 匹配度）；还有检测提前量、命中率、通过率、互动提升。', target: '#metrics-body' },
 ];
 
 function syncTourUI() {
@@ -669,9 +827,87 @@ function bind() {
     render();
   };
 
+  /* ---- 团队审核：切换当前身份 ---- */
+  $('#actor-select').onchange = async (e) => {
+    try {
+      state.data = await api('/api/members/actor', { memberId: e.target.value });
+      const a = state.data.actor;
+      toast(`已切换为 ${a.name}（${a.roleLabel}）`, 'ok');
+      render();
+    } catch (err) {
+      toast(err.message, 'bad');
+    }
+  };
+
+  /* ---- 排期监控 ---- */
+  $('#btn-alerts').onclick = () => {
+    switchTab('overview');
+    const el = $('#alerts-list');
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.classList.remove('pulse');
+    void el.offsetWidth;
+    el.classList.add('pulse');
+  };
+
+  $('#sched-enabled').onchange = async (e) => {
+    try {
+      const r = await api('/api/scheduler', { scheduler: { enabled: e.target.checked } });
+      state.data = await api('/api/state');
+      toast(r.scheduler.enabled ? '已开启排期监控（后台无人值守轮询）' : '已停止排期监控', 'ok');
+      render();
+    } catch (err) {
+      toast(err.message, 'bad');
+    }
+  };
+
+  $('#btn-sched-tick').onclick = async () => {
+    const btn = $('#btn-sched-tick');
+    setBusy(btn, true, '轮询中…');
+    try {
+      const r = await api('/api/scheduler/tick', {});
+      state.data = r.state;
+      const s = r.result;
+      if (s.ok) {
+        logLine(`[排期监控] 窗口 ${s.window} · 帖子 ${s.postCount} · 话题 ${s.topicCount} · Top1 ${s.topScore ?? '—'} · 新增提醒 ${s.alertsRaised} 条${s.suppressedByQuietHours ? `（静默时段抑制 ${s.suppressedByQuietHours} 条）` : ''}`);
+        toast(`轮询完成：新增提醒 ${s.alertsRaised} 条`, 'ok');
+      } else {
+        toast(`轮询失败：${s.error}`, 'bad');
+      }
+      render();
+    } catch (err) {
+      toast(err.message, 'bad');
+    } finally {
+      setBusy(btn, false);
+    }
+  };
+
+  $('#btn-save-scheduler').onclick = async () => {
+    const num = (sel, dflt) => {
+      const v = Number($(sel).value);
+      return Number.isFinite(v) && v > 0 ? v : dflt;
+    };
+    const payload = {
+      scheduler: {
+        intervalMinutes: num('#sched-interval', 30),
+        window: $('#sched-window').value,
+        alertScore: num('#sched-threshold', 55),
+        dedupeHours: num('#sched-dedupe', 6),
+        quietHours: [Number($('#sched-quiet-from').value) || 0, Number($('#sched-quiet-to').value) || 0],
+        quietOverrideScore: num('#sched-override', 80),
+      },
+    };
+    try {
+      await api('/api/scheduler', payload);
+      state.data = await api('/api/state');
+      toast('排期设置已保存并生效', 'ok');
+      render();
+    } catch (err) {
+      toast(err.message, 'bad');
+    }
+  };
+
   $('#btn-tour').onclick = startTour;
-  $('#tour-close').onclick = () => ($('#tour').hidden = true);
-  $('#tour-prev').onclick = () => {
+  $('#tour-close').onclick = () => ($('#tour').hidden = true);  $('#tour-prev').onclick = () => {
     state.tourIndex = Math.max(0, state.tourIndex - 1);
     syncTourUI();
   };
@@ -707,9 +943,30 @@ function bind() {
       return draftAction('/api/draft/update', { id: t.dataset.save, text }, '已保存人工编辑');
     }
     if (t.dataset.regen) return draftAction('/api/draft/regenerate', { id: t.dataset.regen }, '已重新生成');
+    if (t.dataset.review) return draftAction('/api/draft/review', { id: t.dataset.review }, '编辑 Agent 已复评');
     if (t.dataset.approve) return draftAction('/api/draft/status', { id: t.dataset.approve, status: 'approved' }, '已批准');
     if (t.dataset.reject) return draftAction('/api/draft/status', { id: t.dataset.reject, status: 'rejected' }, '已驳回');
     if (t.dataset.publish) return draftAction('/api/draft/publish', { id: t.dataset.publish }, '已发布（模拟）');
+    if (t.dataset.alertRead) {
+      const r = await api('/api/alerts/read', { id: t.dataset.alertRead });
+      state.data.alerts = r.alerts;
+      state.data.unreadAlerts = r.alerts.filter((a) => !a.read).length;
+      return render();
+    }
+  });
+
+  // 审核人分配（下拉框）
+  document.body.addEventListener('change', async (e) => {
+    const sel = e.target.closest('[data-assign-select]');
+    if (!sel) return;
+    try {
+      await api('/api/draft/assign', { id: sel.dataset.assignSelect, memberId: sel.value });
+      state.data = await api('/api/state');
+      toast(sel.value ? '已分配审核人' : '已取消分配', 'ok');
+      render();
+    } catch (err) {
+      toast(err.message, 'bad');
+    }
   });
 }
 
