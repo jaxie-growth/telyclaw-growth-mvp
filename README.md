@@ -7,7 +7,7 @@
 
 核心工作流：`Monitor → Detect → Rank → Ideate → Craft → Review → Publish`
 
-**🔗 在线演示（免安装，直接打开）**：https://telyclaw-growth-engine-28237.app.workbuddy.host/
+**🔗 在线演示（可直接打开）**：https://telyclaw-growth-engine-28237.app.workbuddy.host/
 > 已在云端常驻运行，不依赖本地环境，可直接点开看完整产品，也可直接分享给他人。
 
 **📦 交付物索引**
@@ -287,8 +287,6 @@ telyclaw-growth-engine/
 │  ├─ smoke.js               # 后端链路冒烟测试
 │  └─ ui-smoke.js            # 前端渲染冒烟测试（jsdom）
 ├─ .env.example              # 数据源 / LLM / 端口配置示例
-├─ DEMO_SCRIPT.md            # 3-5 分钟 Demo 视频分镜脚本
-└─ GROWTH_PLAN.md            # 90 天增长问题答稿
 ```
 
 ---
